@@ -5,6 +5,7 @@ import (
 	"bwastartup/campaign"
 	"bwastartup/handler"
 	"bwastartup/helper"
+	"bwastartup/payment"
 	"bwastartup/transaction"
 	"bwastartup/user"
 	"log"
@@ -12,6 +13,7 @@ import (
 	"strings"
 
 	"github.com/dgrijalva/jwt-go"
+	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
 	"gorm.io/driver/mysql"
 	"gorm.io/gorm"
@@ -32,13 +34,15 @@ func main() {
 	userService := user.NewService(userRepository)
 	authService := auth.NewService()
 	campaignService := campaign.NewService(campaignRepository)
-	transactionService := transaction.NewService(transactionRepository, campaignRepository)
+	paymentService := payment.NewService()
+	transactionService := transaction.NewService(transactionRepository, campaignRepository, paymentService)
 
 	userHandler := handler.NewUserHandler(userService, authService)
 	campaignHanlder := handler.NewCampaignHandler(campaignService)
 	transactionhandler := handler.NewTransactionHandler(transactionService)
 
 	router := gin.Default()
+	router.Use(cors.Default())
 	router.Static("/images", "./images")
 	api := router.Group("/api/v1")
 
@@ -46,6 +50,7 @@ func main() {
 	api.POST("/sessions", userHandler.Login)
 	api.POST("/email_checkers", userHandler.CheckEmailAvailability)
 	api.POST("/avatars", authMiddleware(authService, userService), userHandler.UploadAvatar)
+	api.GET("/users/fetch", userHandler.FetchUser)
 
 	api.GET("/campaigns", campaignHanlder.GetCampaigns)
 	api.GET("/campaigns/:id", campaignHanlder.GetCampaign)
@@ -55,33 +60,35 @@ func main() {
 
 	api.GET("/campaigns/:id/transactions", authMiddleware(authService, userService), transactionhandler.GetCampaignTransactions)
 	api.GET("/transactions", authMiddleware(authService, userService), transactionhandler.GetUserTransactions)
+	api.POST("/transactions", authMiddleware(authService, userService), transactionhandler.Createtransaction)
+	api.POST("/transactions/notification", transactionhandler.GetNotification)
 
 	router.Run()
 }
 
 func authMiddleware(authService auth.Service, userService user.Service) gin.HandlerFunc {
-	return func (c *gin.Context) {
+	return func(c *gin.Context) {
 		authHeader := c.GetHeader("Authorization")
-	
+
 		if !strings.Contains(authHeader, "Bearer") {
 			response := helper.APIResponse("Unauthorized", http.StatusUnauthorized, "error", nil)
 			c.AbortWithStatusJSON(http.StatusUnauthorized, response)
 			return
 		}
-	
+
 		tokenString := ""
 		arrayToken := strings.Split(authHeader, " ")
-	
+
 		if len(arrayToken) == 2 {
 			tokenString = arrayToken[1]
 		}
-	
+
 		token, err := authService.ValidateToken(tokenString)
 
 		if err != nil {
 			response := helper.APIResponse("Unauthorized", http.StatusUnauthorized, "error", nil)
 			c.AbortWithStatusJSON(http.StatusUnauthorized, response)
-			return 
+			return
 		}
 
 		claim, ok := token.Claims.(jwt.MapClaims)
@@ -89,7 +96,7 @@ func authMiddleware(authService auth.Service, userService user.Service) gin.Hand
 		if !ok || !token.Valid {
 			response := helper.APIResponse("Unauthorized", http.StatusUnauthorized, "error", nil)
 			c.AbortWithStatusJSON(http.StatusUnauthorized, response)
-			return 
+			return
 		}
 
 		userId := int(claim["user_id"].(float64))
@@ -99,12 +106,9 @@ func authMiddleware(authService auth.Service, userService user.Service) gin.Hand
 		if err != nil {
 			response := helper.APIResponse("Unauthorized", http.StatusUnauthorized, "error", nil)
 			c.AbortWithStatusJSON(http.StatusUnauthorized, response)
-			return 
+			return
 		}
 
 		c.Set("currentUser", user)
 	}
 }
-
-
-
